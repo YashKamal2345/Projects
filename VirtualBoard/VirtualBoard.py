@@ -13,8 +13,8 @@ class VirtualWhiteboard:
         self.hands = self.mp_hands.Hands(
             static_image_mode=False,
             max_num_hands=1,
-            min_detection_confidence=0.8,  # Increased confidence threshold
-            min_tracking_confidence=0.8    # Increased tracking confidence
+            min_detection_confidence=0.7,
+            min_tracking_confidence=0.7
         )
         self.mp_draw = mp.solutions.drawing_utils
         
@@ -48,13 +48,16 @@ class VirtualWhiteboard:
         
         # For smoothing the drawing
         self.smooth_points = []
-        self.smooth_factor = 5  # Number of points to average
+        self.smooth_factor = 7  # Increased for better smoothing
         
         # Drawing tools
         self.current_tool = "pen"
         self.pen_size = 5
         self.eraser_size = 20
         self.current_color = (0, 0, 255)  # Default red
+        
+        # Board background options
+        self.background_mode = "camera"  # "camera" or "black"
         
         # Colors available
         self.colors = [
@@ -85,7 +88,7 @@ class VirtualWhiteboard:
         self.ui = np.zeros((100, 1280, 3), dtype=np.uint8)
         
         # Draw color palette
-        color_width = 1280 // len(self.colors)
+        color_width = 1280 // (len(self.colors) + 1)  # Adjusted for background button
         for i, color in enumerate(self.colors):
             cv2.rectangle(self.ui, (i * color_width, 0), ((i+1) * color_width, 50), color, -1)
             cv2.rectangle(self.ui, (i * color_width, 0), ((i+1) * color_width, 50), (0, 0, 0), 2)
@@ -95,7 +98,7 @@ class VirtualWhiteboard:
                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, text_color, 1)
         
         # Draw tools
-        tool_width = 1280 // len(self.tools)
+        tool_width = 1280 // (len(self.tools) + 2)  # Adjusted for extra buttons
         for i, tool in enumerate(self.tools):
             cv2.rectangle(self.ui, (i * tool_width, 50), ((i+1) * tool_width, 100), (200, 200, 200), -1)
             cv2.putText(self.ui, tool, (i * tool_width + 10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
@@ -107,6 +110,10 @@ class VirtualWhiteboard:
         
         cv2.rectangle(self.ui, (1280 - 300, 50), (1280 - 160, 100), (100, 255, 100), -1)
         cv2.putText(self.ui, "CLEAR", (1280 - 290, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+        
+        # Add background toggle button
+        cv2.rectangle(self.ui, (1280 - 450, 50), (1280 - 310, 100), (200, 200, 100), -1)
+        cv2.putText(self.ui, "BG TOGGLE", (1280 - 440, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
     
     def is_index_finger_extended(self, hand_landmarks):
         # Check if only index finger is extended (others are folded)
@@ -137,7 +144,7 @@ class VirtualWhiteboard:
         # Check if click is in tool area
         if y < 100:
             # Check colors
-            color_width = 1280 // len(self.colors)
+            color_width = 1280 // (len(self.colors) + 1)
             if y < 50:
                 for i in range(len(self.colors)):
                     if i * color_width <= x < (i+1) * color_width:
@@ -147,7 +154,7 @@ class VirtualWhiteboard:
                         return
             
             # Check tools
-            tool_width = 1280 // len(self.tools)
+            tool_width = 1280 // (len(self.tools) + 2)
             for i in range(len(self.tools)):
                 if i * tool_width <= x < (i+1) * tool_width and 50 <= y < 100:
                     self.current_tool = self.tools[i]
@@ -163,6 +170,12 @@ class VirtualWhiteboard:
             if 1280 - 300 <= x < 1280 - 160 and 50 <= y < 100:
                 self.whiteboard = np.ones((720, 1280, 3), dtype=np.uint8) * 255
                 print("Whiteboard cleared")
+                return
+                
+            # Check background toggle button
+            if 1280 - 450 <= x < 1280 - 310 and 50 <= y < 100:
+                self.background_mode = "black" if self.background_mode == "camera" else "camera"
+                print(f"Background mode: {self.background_mode}")
                 return
     
     def save_whiteboard(self):
@@ -190,9 +203,12 @@ class VirtualWhiteboard:
         if len(self.smooth_points) > self.smooth_factor:
             self.smooth_points.pop(0)
         
-        # Calculate the average of the points
-        avg_x = int(sum(p[0] for p in self.smooth_points) / len(self.smooth_points))
-        avg_y = int(sum(p[1] for p in self.smooth_points) / len(self.smooth_points))
+        # Calculate the weighted average of the points (more weight to recent points)
+        weights = np.arange(1, len(self.smooth_points) + 1)
+        total_weight = np.sum(weights)
+        
+        avg_x = int(np.sum([p[0] * w for p, w in zip(self.smooth_points, weights)]) / total_weight)
+        avg_y = int(np.sum([p[1] * w for p, w in zip(self.smooth_points, weights)]) / total_weight)
         
         return avg_x, avg_y
     
@@ -219,8 +235,12 @@ class VirtualWhiteboard:
         print("INSTRUCTIONS:")
         print("1. To draw: Extend only your index finger (keep other fingers folded)")
         print("2. To select tool/color: Point with your index finger to the UI area")
-        print("3. Press 'q' to quit, 'c' to clear, 's' to save")
+        print("3. Press 'q' to quit, 'c' to clear, 's' to save, 'b' to toggle background")
         print("4. Make sure your hand is well-lit and visible to the camera")
+        
+        # Create a fullscreen window
+        cv2.namedWindow("Virtual Whiteboard", cv2.WND_PROP_FULLSCREEN)
+        cv2.setWindowProperty("Virtual Whiteboard", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         
         while True:
             ret, frame = self.cap.read()
@@ -240,13 +260,14 @@ class VirtualWhiteboard:
             drawing_allowed = False
             if results.multi_hand_landmarks:
                 for hand_landmarks in results.multi_hand_landmarks:
-                    # Draw hand landmarks
-                    self.mp_draw.draw_landmarks(frame, hand_landmarks, self.mp_hands.HAND_CONNECTIONS)
-                    
-                    # Get index finger tip coordinates
+                    # Draw hand landmarks (only index finger for clarity)
+                    index_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.INDEX_FINGER_TIP]
                     h, w, c = frame.shape
-                    x = int(hand_landmarks.landmark[self.mp_hands.HandLandmark.INDEX_FINGER_TIP].x * w)
-                    y = int(hand_landmarks.landmark[self.mp_hands.HandLandmark.INDEX_FINGER_TIP].y * h)
+                    x = int(index_tip.x * w)
+                    y = int(index_tip.y * h)
+                    
+                    # Draw only index finger tip
+                    cv2.circle(frame, (x, y), 10, (0, 255, 0), -1)
                     
                     # Check if only index finger is extended
                     drawing_allowed = self.is_index_finger_extended(hand_landmarks)
@@ -270,12 +291,21 @@ class VirtualWhiteboard:
                 drawing_allowed = False
                 self.smooth_points = []  # Reset smoothing when no hand is detected
             
-            # Combine whiteboard and camera feed
-            combined = np.vstack((self.ui, self.whiteboard))
-            
-            # Resize frame to match whiteboard dimensions
-            frame_resized = cv2.resize(frame, (1280, 720))
-            combined[100:820, :] = cv2.addWeighted(frame_resized, 0.3, combined[100:820, :], 0.7, 0)
+            # Create the display based on background mode
+            if self.background_mode == "camera":
+                # Combine whiteboard and camera feed
+                combined = np.vstack((self.ui, self.whiteboard))
+                
+                # Resize frame to match whiteboard dimensions
+                frame_resized = cv2.resize(frame, (1280, 720))
+                combined[100:820, :] = cv2.addWeighted(frame_resized, 0.3, combined[100:820, :], 0.7, 0)
+            else:
+                # Use black background
+                black_bg = np.zeros((720, 1280, 3), dtype=np.uint8)
+                combined = np.vstack((self.ui, black_bg))
+                
+                # Add the whiteboard drawing on top
+                combined[100:820, :] = cv2.addWeighted(self.whiteboard, 1.0, combined[100:820, :], 1.0, 0)
             
             # Display current tool and color
             color_name = self.color_names[self.colors.index(self.current_color)] if self.current_color in self.colors else "Custom"
@@ -286,8 +316,12 @@ class VirtualWhiteboard:
             status = "Ready to draw" if drawing_allowed else "Make a fist or extend only index finger to draw"
             cv2.putText(combined, status, (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
             
+            # Show background mode
+            bg_text = f"Background: {self.background_mode} (Press 'B' to toggle)"
+            cv2.putText(combined, bg_text, (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+            
             # Show controls
-            cv2.putText(combined, "Press 'Q' to quit | 'S' to save | 'C' to clear", (10, 180), 
+            cv2.putText(combined, "Press 'Q' to quit | 'S' to save | 'C' to clear", (10, 210), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
             
             # Show the combined image
@@ -302,6 +336,9 @@ class VirtualWhiteboard:
                 print("Whiteboard cleared")
             elif key == ord('s') or key == ord('S'):
                 self.save_whiteboard()
+            elif key == ord('b') or key == ord('B'):
+                self.background_mode = "black" if self.background_mode == "camera" else "camera"
+                print(f"Background mode: {self.background_mode}")
         
         if self.cap:
             self.cap.release()
@@ -312,15 +349,28 @@ class VirtualWhiteboard:
         print("Running in demo mode without camera")
         print("You can test the UI but hand tracking won't work")
         
+        # Create a fullscreen window
+        cv2.namedWindow("Virtual Whiteboard (Demo Mode)", cv2.WND_PROP_FULLSCREEN)
+        cv2.setWindowProperty("Virtual Whiteboard (Demo Mode)", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        
         # Create a blank black image as a placeholder for camera feed
         placeholder = np.zeros((720, 1280, 3), dtype=np.uint8)
         cv2.putText(placeholder, "Camera not available", (400, 360), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
         cv2.putText(placeholder, "Press 'q' to quit", (450, 400), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         
         while True:
-            # Combine whiteboard and placeholder
-            combined = np.vstack((self.ui, self.whiteboard))
-            combined[100:820, :] = cv2.addWeighted(placeholder, 0.3, combined[100:820, :], 0.7, 0)
+            # Create the display based on background mode
+            if self.background_mode == "camera":
+                # Combine whiteboard and placeholder
+                combined = np.vstack((self.ui, self.whiteboard))
+                combined[100:820, :] = cv2.addWeighted(placeholder, 0.3, combined[100:820, :], 0.7, 0)
+            else:
+                # Use black background
+                black_bg = np.zeros((720, 1280, 3), dtype=np.uint8)
+                combined = np.vstack((self.ui, black_bg))
+                
+                # Add the whiteboard drawing on top
+                combined[100:820, :] = cv2.addWeighted(self.whiteboard, 1.0, combined[100:820, :], 1.0, 0)
             
             # Display current tool and color
             color_name = self.color_names[self.colors.index(self.current_color)] if self.current_color in self.colors else "Custom"
@@ -328,6 +378,10 @@ class VirtualWhiteboard:
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
             cv2.putText(combined, "Camera not available - running in demo mode", (10, 150), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+            
+            # Show background mode
+            bg_text = f"Background: {self.background_mode} (Press 'B' to toggle)"
+            cv2.putText(combined, bg_text, (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
             
             # Show the combined image
             cv2.imshow("Virtual Whiteboard (Demo Mode)", combined)
@@ -341,6 +395,9 @@ class VirtualWhiteboard:
                 print("Whiteboard cleared")
             elif key == ord('s') or key == ord('S'):
                 self.save_whiteboard()
+            elif key == ord('b') or key == ord('B'):
+                self.background_mode = "black" if self.background_mode == "camera" else "camera"
+                print(f"Background mode: {self.background_mode}")
         
         cv2.destroyAllWindows()
 
